@@ -1,7 +1,7 @@
 " File: findstr.vim
 " Author: Yegappan Lakshmanan (yegappan AT yahoo DOT com)
-" Version: 0.1
-" Last Modified: June 16, 2006
+" Version: 0.1g
+" Last Modified: Aug 1, 2016
 " 
 " Overview
 " --------
@@ -26,9 +26,12 @@
 "
 " Usage
 " -----
-" The findstr.vim plugin introduces the ":Findstring", ":Findpattern",
-" ":Rfindstr" and ":Rfindpattern" Vim commands to search for text and patterns
+" The findstr.vim plugin introduces the "VimFindstr", ":Findstring", ":Findpattern",
+" ":Rfindstr", ":Rfindpattern" and ":EasyFindStr" Vim commands to search for text and patterns
 " in files.
+"
+" The ":VimFindstr" includes some features like EasyGrep, gives a friendly
+" menu to show serach options.
 "
 " The ":Findstring" command is used to search for literal strings in files in
 " the current directory. The ":Rfindstring" command is used to search for a
@@ -38,6 +41,11 @@
 " pattern in files in the current directory. The ":Rfindpattern" command is
 " used to search for a regular expression pattern in the files in a directory
 " tree.
+"
+" The ":EasyFindStr" command is used to search for string under current cursor
+" in file with same extension in current directory, without any keyboard hit, more lazy
+" You can map shortcut to invoke this command. For example,
+"       nnoremap <silent> <leader>ff :EasyFindStr<CR>
 "
 " The syntax of these commands is
 "
@@ -137,6 +145,9 @@
 "
 " You can manually open the quickfix window using the :cwindow command.
 "
+" The 'Findstr_Exclude_Dir' specifies the list of directories to skip.
+"       : let Findstr_Exclude_Dir = '.git\\ .svn\\ cvs\\ rcs\\ sccs\\'
+"
 " --------------------- Do not modify after this line ---------------------
 if exists("loaded_findstr")
     finish
@@ -154,15 +165,367 @@ if !exists("Findstr_OpenQuickfixWindow")
     let Findstr_OpenQuickfixWindow = 1
 endif
 
-" Default search file list
+" Default search file list, such as '*.c *.py *.php'
 if !exists("Findstr_Default_Filelist")
     let Findstr_Default_Filelist = '*'
 endif
 
 " Default search options
-if !exists("Findstr_Default_Options")
-    let Findstr_Default_Options = ''
+if !exists("Findstr_Use_Vimgrep")
+    let Findstr_Use_Vimgrep = 0
 endif
+
+if !exists("Findstr_Default_Options")
+    let Findstr_Default_Options = ""
+endif
+
+if !exists("Findstr_Exclude_Dir")
+    let Findstr_Exclude_Dir = ""
+endif
+
+if !exists("Findstr_Recursive")
+    let Findstr_Recursive = 1
+endif
+
+if !exists("Findstr_IgnoreCase")
+    let Findstr_IgnoreCase = 1
+endif
+
+if !exists("Findstr_WholeWord")
+    let Findstr_WholeWord = 0
+endif
+
+if !exists("Findstr_ExpReg")
+    let Findstr_ExpReg = 0
+endif
+
+if !exists("s:Search_Directory")
+    let s:Search_Directory = getcwd()
+endif
+
+let s:Search_Word = ""
+
+let s:OptionsMenuOpen = 0
+
+function! s:OnOrOff(num)
+    return a:num == 0 ? 'off' : 'on'
+endfunction
+
+" Search Option Menu
+function! s:CreateOptions()
+    " add findstr options
+    let s:Options = []
+    call add(s:Options, "\"q: quit")
+    call add(s:Options, "\"s: use vimgrep (" .s:OnOrOff(g:Findstr_Use_Vimgrep).")")
+    call add(s:Options, "\"r: recursive mode (".s:OnOrOff(g:Findstr_Recursive).")")
+    call add(s:Options, "\"i: ignore case (".s:OnOrOff(g:Findstr_IgnoreCase).")")
+    call add(s:Options, "\"w: whole word (".s:OnOrOff(g:Findstr_WholeWord).")")
+    call add(s:Options, "\"p: regular expression (".s:OnOrOff(g:Findstr_ExpReg).")")
+    call add(s:Options, "")
+    call add(s:Options, "\"f: search files (eg. *.h *.c): " . g:Findstr_Default_Filelist)
+    call add(s:Options, "\"d: search directory: " . s:Search_Directory)
+    call add(s:Options, "\"c: Search Word: " . s:Search_Word)
+endfunction
+
+function! s:MapOptionKeys()
+    nnoremap <buffer> <silent> q    :call <sid>Quit()<cr>
+    nnoremap <buffer> <silent> s    :call <sid>ChCmd()<cr>
+    nnoremap <buffer> <silent> r    :call <sid>ToggleRecursion()<cr>
+    nnoremap <buffer> <silent> i    :call <sid>ToggleIgnoreCase()<cr>
+    nnoremap <buffer> <silent> w    :call <sid>ToggleWholeWord()<cr>
+    nnoremap <buffer> <silent> p    :call <sid>ToggleRegExp()<cr>
+    nnoremap <buffer> <silent> f    :call <sid>SetSearchFiles()<cr>
+    nnoremap <buffer> <silent> d    :call <sid>SetSearchDirectory()<cr>
+    nnoremap <buffer> <silent> c    :call <sid>SetSearchWord()<cr>
+    nnoremap <buffer> <silent> <Enter> :call <sid>StartFinding()<cr>
+endfunction
+
+function! s:RefreshAllOptions()    
+    if !s:OptionsMenuOpen
+        return
+    endif
+
+    call s:CreateOptions()
+    setlocal modifiable
+    let lastLine = len(s:Options)
+    let line = 0
+    while line < lastLine
+        call setline(line+1, s:Options[line])
+        let line += 1
+    endwhile
+
+    setlocal nomodifiable
+endfunction
+
+function! s:SetSearchDirectory()
+    let s:Search_Directory = input("Search Directory: ", s:Search_Directory)
+    echo "\r"
+    call s:RefreshAllOptions()
+    call s:Echo("Set Search Directory to (" . s:Search_Directory .")")
+endfunction
+
+function! s:SetSearchWord()
+    let s:Search_Word = input("Search Word: ", s:Search_Word)
+    echo "\r"
+    call s:RefreshAllOptions()
+    call s:Echo("Set Search Word to (" . s:Search_Word .")")
+endfunction
+
+function! s:SetSearchFiles()
+    let g:Findstr_Default_Filelist = input("Search Files: ", g:Findstr_Default_Filelist)
+    echo "\r"
+    call s:RefreshAllOptions()
+    call s:Echo("Set Search Files to (" . g:Findstr_Default_Filelist .")")
+endfunction
+
+function! s:ToggleRecursion()
+    let g:Findstr_Recursive = !g:Findstr_Recursive
+    call s:RefreshAllOptions()
+    call s:Echo("Set recursive to (" . s:OnOrOff(g:Findstr_Recursive) . ")")
+endfunction
+
+function s:ToggleIgnoreCase()
+    let g:Findstr_IgnoreCase = !g:Findstr_IgnoreCase
+    call s:RefreshAllOptions()
+    call s:Echo("Set ignore case to (" . s:OnOrOff(g:Findstr_IgnoreCase) . ")")
+endfunction
+
+function! s:ToggleWholeWord()
+    let g:Findstr_WholeWord = !g:Findstr_WholeWord
+    call s:RefreshAllOptions()
+    call s:Echo("Set whole word to (" . s:OnOrOff(g:Findstr_WholeWord) . ")")
+endfunction
+
+function! s:ToggleRegExp()
+    let g:Findstr_ExpReg = !g:Findstr_ExpReg
+    call s:RefreshAllOptions()
+    call s:Echo("Set use ExpReg to (" . s:OnOrOff(g:Findstr_ExpReg) . ")")
+endfunction
+
+function! s:ChCmd()
+    let g:Findstr_Use_Vimgrep= !g:Findstr_Use_Vimgrep
+    call s:RefreshAllOptions()
+    call s:Echo("Set use Vimgrep to (" . s:OnOrOff(g:Findstr_Use_Vimgrep) . ")")
+endfunction
+
+function! s:Quit()
+    let s:OptionsMenuOpen = 0
+    echo ""
+    quit
+endfunction
+
+function! s:FillWindow()
+    setlocal modifiable
+    " Clear the entire window
+    execute "silent %delete"
+
+    "call s:CreateOptions()
+    call append(0, s:Options)
+    call s:RefreshAllOptions()
+
+    "setlocal modifiable
+    "call s:UpdateAllSelections()
+    setlocal nomodifiable
+
+    " place the cursor at the start of the special options
+    execute "".len(s:Options)
+endfunction
+
+function! s:OpenOptionsMenu()
+    let s:OptionsMenuOpen = 1
+    call s:CreateOptions()
+    let windowLines = len(s:Options)
+
+    " split the window; fit exactly right
+    exe "keepjumps botright ".windowLines."new"
+
+    setlocal bufhidden=delete
+    setlocal buftype=nofile
+    setlocal nobuflisted
+    setlocal noswapfile
+    setlocal cursorline
+
+    syn match Help    /^".*/
+    highlight def link Help Special
+
+    syn match Activated    /^>\w.*/
+    highlight def link Activated Type
+
+    syn match Selection    /^\ \w.*/
+    highlight def link Selection String
+
+    call s:MapOptionKeys()
+    call s:FillWindow()
+endfunction
+
+" MS-DOS findstr command help:
+"  https://technet.microsoft.com/en-us/library/bb490907.aspx
+function! VimFindstr()
+    let s:Search_Word = expand("<cword>")
+    call s:OpenOptionsMenu()
+    " call s:SetSearchWord()
+endfunction
+
+function! s:StartFinding()
+    if g:Findstr_Use_Vimgrep == 1
+        call s:ExecVimgrep()
+    else
+        call s:ExecFindstr()
+    endif
+endfunction
+
+function! s:ExecVimgrep()
+    " close last quickfix first
+    if s:OptionsMenuOpen == 1
+        let s:OptionsMenuOpen = 0
+        quit
+    endif
+
+    let cmd = 'vimgrep /' . s:Search_Word . '/j'
+
+    let s:file_list_str = ""
+    if !exists("g:Findstr_Default_Filelist")
+        if(g:Findstr_Recursive == 1)
+                let s:file_list_str = s:Search_Directory . '/**/*.*'
+        else
+            let s:file_list_str = s:Search_Directory . '*.*'
+        endif
+    else
+        let s:file_list = split(g:Findstr_Default_Filelist)
+        for tmpf in s:file_list
+            if(g:Findstr_Recursive == 1)
+                let s:file_list_str = s:file_list_str . ' ' . s:Search_Directory . '/**/' . tmpf
+            else
+                let s:file_list_str = s:file_list_str . ' ' . s:Search_Directory . '/' . tmpf
+            endif
+        endfor
+    endif
+
+    if(g:Findstr_IgnoreCase == 1)
+        set ignorecase
+    else
+        set noignorecase
+    endif
+
+    let cmd = cmd . s:file_list_str
+
+    " debug output to %temp% directory
+    "let tmpfile = tempname()
+    "exe "redir! > " . tmpfile
+    "silent echon cmd
+    "redir END
+
+    execute "silent! " . cmd
+    botright copen
+    call s:AutoHighLightWord(s:Search_Word)
+endfunction
+
+function! s:ExecFindstr()
+    " close option menu first
+    if s:OptionsMenuOpen == 1
+        let s:OptionsMenuOpen = 0
+        quit
+    endif
+
+    let cmd = 'findstr '
+    let options = '/N /P'
+    let exclude_opt = ''
+
+    if(!exists("s:Search_Word"))
+        echo "orz..."
+        return
+    endif
+
+    " make findstr options
+    if(g:Findstr_Recursive == 1)
+        let options = options . ' /S'
+    endif
+
+    if(g:Findstr_IgnoreCase == 1)
+        let options = options . ' /I'
+    endif
+
+    if(g:Findstr_ExpReg == 1)
+        let options = options . ' /R'
+    else
+        let options = options . ' /L'
+    endif
+
+    " @TODO
+    if(g:Findstr_WholeWord ==1 )
+        let s:Search_Word = s:Search_Word
+    endif
+
+    " search file list
+    if (!exists("g:Findstr_Default_Filelist"))
+        let g:Findstr_Default_Filelist = '*'
+    endif
+
+    " search directory
+    let s:Search_Directory = substitute(s:Search_Directory, '\\$', '', '')
+
+    " exclude directory
+    if exists("g:Findstr_Exclude_Dir")
+        let txt = g:Findstr_Exclude_Dir . ' '
+        while txt != ''
+            let one_opt = strpart(txt, 0, stridx(txt, ' '))
+            let exclude_opt = exclude_opt . ' | findstr /V "' . one_opt . '"'
+            let txt = strpart(txt, stridx(txt, ' ') + 1)
+        endwhile
+    endif
+
+    let cmd = cmd . options
+    let cmd = cmd . ' /C:"' . s:Search_Word . '"'
+    let cmd = cmd . ' /D:"' . s:Search_Directory . '"'
+    let cmd = cmd . ' ' . g:Findstr_Default_Filelist
+    let cmd = cmd . ' ' . exclude_opt
+    let cmd_output = system(cmd)
+
+    if cmd_output == ''
+        echohl WarningMsg | 
+        \ echomsg "Error: Pattern " . s:Search_Word . " not found" | 
+        \ echohl None
+        return
+    endif
+
+    if g:Findstr_Recursive == 1
+        let spat = "[^\n]\\+\n"
+        let rpat = escape(s:Search_Directory, '\') . '\\&'
+        let cmd_output = substitute(cmd_output, spat, rpat, "g")
+    endif
+
+    let tmpfile = tempname()
+
+    let old_verbose = &verbose
+    set verbose&vim
+
+    exe "redir! > " . tmpfile
+    silent echon '[Search results for pattern: ' . s:Search_Word . '] ' . cmd ."\n"
+    silent echon cmd_output
+    redir END
+
+    let &verbose = old_verbose
+
+    let old_efm = &efm
+    set efm=%f:%\\s%#%l:%m
+
+    if exists(":cgetfile")
+        execute "silent! cgetfile " . tmpfile
+    else
+        execute "silent! cfile " . tmpfile
+    endif
+
+    let &efm = old_efm
+
+    " Open the search output window
+    if g:Findstr_OpenQuickfixWindow == 1
+        " Open the quickfix window below the current window
+        botright copen
+        call s:AutoHighLightWord(s:Search_Word)
+    endif
+
+    call delete(tmpfile)
+endfunction
 
 " RunFindStr()
 function! s:RunFindStr(cmd_name, cmd_opt, ...)
@@ -196,6 +559,17 @@ function! s:RunFindStr(cmd_name, cmd_opt, ...)
         let findstr_opt = g:Findstr_Default_Options
     endif
 
+    " Exclude directory
+    let findstr_exclude = ''
+    if exists("g:Findstr_Exclude_Dir")
+        let txt = g:Findstr_Exclude_Dir . ' '
+        while txt != ''
+            let one_opt = strpart(txt, 0, stridx(txt, ' '))
+            let findstr_exclude = findstr_exclude . ' | findstr /V "' . one_opt . '"'
+            let txt = strpart(txt, stridx(txt, ' ') + 1)
+        endwhile
+    endif
+    
     " Display line number for all the matching lines
     let findstr_opt = findstr_opt . ' /N ' . a:cmd_opt
 
@@ -229,12 +603,13 @@ function! s:RunFindStr(cmd_name, cmd_opt, ...)
         endif
     endif
 
-    echo "\n"
+    " Avoiding the 'Hit ENTER to continue' prompts
+    echo "\r"
 
     let cmd = "findstr " . findstr_opt
     let cmd = cmd . ' /C:"' . pattern . '"'
     let cmd = cmd . ' ' . filenames
-
+    let cmd = cmd . ' ' . findstr_exclude
     let cmd_output = system(cmd)
 
     if cmd_output == ''
@@ -258,6 +633,7 @@ function! s:RunFindStr(cmd_name, cmd_opt, ...)
     set verbose&vim
 
     exe "redir! > " . tmpfile
+    " silent echon cmd . "\n"
     silent echon '[Search results for pattern: ' . pattern . "]\n"
     silent echon cmd_output
     redir END
@@ -284,6 +660,84 @@ function! s:RunFindStr(cmd_name, cmd_opt, ...)
     call delete(tmpfile)
 endfunction
 
+function! s:EasyFindStr()
+    " default opt: /N: print line num, /S:recursive, /L:search string
+    let findstr_opt  = g:Findstr_Default_Options . ' /N /S /L'
+    " get word under the cursor
+    let string  = expand("<cword>")
+    " search in files with same extension
+    let ext = expand('%:e')
+    if ext == ''
+        let files = '*'
+    else
+        let files = '*.' . ext
+    endif
+    " search directory
+    let findstr_dir = getcwd()
+    " exclude directory
+    let findstr_exclude = ''
+    if exists("g:Findstr_Exclude_Dir")
+        let txt = g:Findstr_Exclude_Dir . ' '
+        while txt != ''
+            let one_opt = strpart(txt, 0, stridx(txt, ' '))
+            let findstr_exclude = findstr_exclude . ' | findstr /V "' . one_opt . '"'
+            let txt = strpart(txt, stridx(txt, ' ') + 1)
+        endwhile
+    endif
+    let cmd = "findstr " . findstr_opt
+    let cmd = cmd . ' /D:' . findstr_dir
+    let cmd = cmd . ' /C:"' . string . '"'
+    let cmd = cmd . ' ' . files
+    let cmd = cmd . ' ' . findstr_exclude
+    let cmd_output = system(cmd)
+        if cmd_output == ''
+        echohl WarningMsg | 
+        \ echomsg "Error: " . string . " not found" | 
+        \ echohl None
+        return
+    endif
+
+    let spat = "[^\n]\\+\n"
+    let rpat = escape(findstr_dir, '\') . '\\&'
+    let cmd_output = substitute(cmd_output, spat, rpat, "g")
+
+    let tmpfile = tempname()
+    let old_verbose = &verbose
+    set verbose&vim
+
+    exe "redir! > " . tmpfile
+    silent echon '[Search results for string: ' . string . "]\n"
+    "silent echon cmd . "\n"
+    silent echon cmd_output
+    redir END
+
+    let &verbose = old_verbose
+    let old_efm = &efm
+    set efm=%f:%\\s%#%l:%m
+    if exists(":cgetfile")
+        execute "silent! cgetfile " . tmpfile
+    else
+        execute "silent! cfile " . tmpfile
+    endif
+    let &efm = old_efm
+    botright copen
+    call delete(tmpfile)
+endfunction
+
+function! s:AutoHighLightWord(match)
+    let @/ = '\<' . a:match . '\>'
+    return ":silent set hlsearch\<CR>"
+endfunction
+
+function! s:Echo(message)
+    let str = ""
+    if !s:OptionsMenuOpen
+        let str .= "[Findstr] "
+    endif
+    let str .= a:message
+    echo str
+endfunction
+
 " Define the findstr commands
 command! -nargs=* -complete=file Findstring
             \ call s:RunFindStr("Findstring", "/L", <f-args>)
@@ -293,7 +747,26 @@ command! -nargs=* -complete=file Rfindstring
             \ call s:RunFindStr("Rfindstring", "/S /L", <f-args>)
 command! -nargs=* -complete=file Rfindpattern
             \ call s:RunFindStr("Rfindpattern", "/S /R", <f-args>)
+command! -nargs=* -complete=file EasyFindStr
+            \ call s:EasyFindStr()
+command! -nargs=* -complete=file VimFindstr
+            \ call VimFindstr()
 
+" Add the Find->Findstr menu
+if has('gui_running')
+    anoremenu <silent> Find.Findstr.Current\ Directory<Tab>:Findstring
+                \ :Findstring<CR>
+    anoremenu <silent> Find.Findstr.Recursively<Tab>:Rfindstring
+                \ :Rfindstring<CR>
+    anoremenu <silent> Find.Findstr.RegExp<Tab>:Findpattern
+                \ :Findpattern<CR>
+    anoremenu <silent> Find.Findstr.RegExp\ Recursively<Tab>:Rfindpattern
+                \ :Rfindpattern<CR>
+    menu <silent> Find.Findstr.-Sep-
+                \ :
+    anoremenu <silent> Find.Findstr.VimFindstr<Tab>:VimFindstr
+                \ :VimFindstr<CR>
+endif
 " restore 'cpo'
 let &cpo = s:cpo_save
 unlet s:cpo_save
