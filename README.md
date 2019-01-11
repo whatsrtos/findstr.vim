@@ -4,7 +4,7 @@
 The findstr plugin integrates the MS-Windows findstr search utility with Vim. You can use this plugin to search for a pattern or text in multiple files in the current directory or in a directory tree and easily jump to the matches. This plugin is useful only on MS-Windows based systems where the findstr utility is available. 
 
 ## Screenshot
-![findstr](https://raw.githubusercontent.com/WhatsDJGPP/findstr.vim/test/screenshot.png)
+![findstr](https://raw.githubusercontent.com/whatsrtos/findstr.vim/master/screenshot.png)
 
 ## Usage 
 The findstr plugin introduces the `:VimFindstr`, `:Findstring`, `:Findpattern`, `:Rfindstr`, `:Rfindpattern` and `:EasyFindStr` Vim commands to search for text and patterns in files. 
